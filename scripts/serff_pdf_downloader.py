@@ -469,7 +469,14 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,  # VISIBLE — required for downloads to work reliably
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-extensions",       # no ad blockers
+                "--disable-plugins",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ],
             downloads_path=str(PDF_DIR / "_tmp_downloads")
         )
         
