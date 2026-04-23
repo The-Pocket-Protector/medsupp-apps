@@ -340,24 +340,62 @@ def main():
         )
         page = context.new_page()
         
-        # First: accept terms globally
-        print("Opening SERFF to accept terms...")
+        # ── Accept SERFF terms ─────────────────────────────────────────────
+        print("Opening SERFF — accepting terms...")
         page.goto(f"{SERFF_BASE}/sfa/home/KY", timeout=30000)
         page.wait_for_load_state("networkidle")
-        time.sleep(1)
+        time.sleep(2)
         
-        # Find and click Begin Search
-        begin_links = page.query_selector_all("a")
-        for a in begin_links:
-            href = a.get_attribute("href") or ""
-            txt = a.text_content() or ""
-            if "userAgreement" in href or "Begin Search" in txt.strip():
-                a.click()
+        # Step 1: Click "Begin Search" (goes to user agreement page)
+        try:
+            page.click("text=Begin Search", timeout=5000)
+            page.wait_for_load_state("networkidle")
+            time.sleep(1)
+            print("  Clicked 'Begin Search'")
+        except Exception:
+            # Try href-based approach
+            for a in page.query_selector_all("a"):
+                href = a.get_attribute("href") or ""
+                if "userAgreement" in href or "beginSearch" in href:
+                    a.click()
+                    page.wait_for_load_state("networkidle")
+                    time.sleep(1)
+                    print("  Clicked agreement link")
+                    break
+        
+        # Step 2: Accept the user agreement
+        accepted = False
+        for selector in ["text=Accept", "text=I Accept", "text=Agree", "text=I Agree",
+                         "input[value='Accept']", "input[value='I Accept']",
+                         "button:has-text('Accept')"]:
+            try:
+                page.click(selector, timeout=3000)
                 page.wait_for_load_state("networkidle")
                 time.sleep(1)
+                print(f"  Accepted terms via: {selector}")
+                accepted = True
                 break
+            except Exception:
+                pass
         
-        accept_terms_if_needed(page)
+        if not accepted:
+            # Take a debug screenshot of what we see
+            debug_dir = PDF_DIR / "_debug"
+            debug_dir.mkdir(exist_ok=True)
+            page.screenshot(path=str(debug_dir / "terms_page.png"))
+            all_links = []
+            for e in page.query_selector_all("a, button, input"):
+                t = (e.text_content() or e.get_attribute("value") or "").strip()
+                h = e.get_attribute("href") or ""
+                if t or h:
+                    all_links.append(f"{t} | href={h}")
+            with open(debug_dir / "terms_page_links.txt", "w") as f:
+                f.write(f"URL: {page.url}\n\n" + "\n".join(all_links))
+            print(f"  [warn] Could not auto-accept terms.")
+            print(f"  Debug screenshot: output/pdfs/_debug/terms_page.png")
+            print(f"  The browser window is open — please click Accept manually, then press Enter here.")
+            input("  Press Enter after accepting terms in the browser...")
+        
         print("Terms accepted. Starting downloads...\n")
         
         for i, filing in enumerate(filings):
