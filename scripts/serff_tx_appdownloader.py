@@ -159,16 +159,13 @@ def go_to_search_page(page):
             pass
     print(f"  [nav] links on home page: {link_info}")
 
-    # Click Begin Search
-    clicked = False
+    # Step 1: Click "Begin Search" — goes to userAgreement.xhtml
     for selector in [
         "a:has-text('Begin Search')",
+        "a[href*='userAgreement']",
         "a:has-text('Search Filings')",
         "a:has-text('Filing Search')",
         "a[href*='filingSearch']",
-        "a[href*='search']",
-        "input[value*='Search' i]",
-        "button:has-text('Search')",
     ]:
         try:
             el = page.locator(selector).first
@@ -179,35 +176,93 @@ def go_to_search_page(page):
                     page.wait_for_load_state("networkidle", timeout=15000)
                 except Exception:
                     pass
-                time.sleep(2)
-                clicked = True
+                time.sleep(1.5)
                 break
         except Exception:
             pass
 
-    if not clicked:
-        screenshot(page, "ERROR_no_begin_search")
-        print("  [nav] WARNING: could not click Begin Search")
+    dshot(page, "02_after_begin_search")
+    print(f"  [nav] URL: {page.url}")
 
-    dshot(page, "03_after_click")
-    print(f"  [nav] URL after click: {page.url}")
+    # Step 2: If we landed on the user agreement page, accept it
+    if "userAgreement" in page.url or "agreement" in page.url.lower():
+        print("  [nav] on user agreement page — accepting ...")
+        body_text = ""
+        try:
+            body_text = page.locator("body").inner_text()[:200]
+        except Exception:
+            pass
+        print(f"  [nav] agreement page text: {body_text[:100]}")
 
-    # Wait for form to render
-    print("  [nav] waiting for search form ...")
+        # Log all buttons/inputs on the page
+        btns = page.locator("input[type='submit'], input[type='button'], button").all()
+        btn_info = []
+        for b in btns:
+            try:
+                btn_info.append((b.get_attribute("value") or b.inner_text(), b.get_attribute("type")))
+            except Exception:
+                pass
+        print(f"  [nav] buttons on agreement page: {btn_info}")
+
+        accepted = False
+        # Try common accept button patterns
+        for selector in [
+            "input[value*='Agree' i]",
+            "input[value*='Accept' i]",
+            "input[value*='Continue' i]",
+            "input[value*='Search' i]",
+            "button:has-text('Agree')",
+            "button:has-text('Accept')",
+            "button:has-text('Continue')",
+            "button:has-text('I Agree')",
+            "a:has-text('Agree')",
+            "a:has-text('Accept')",
+            "a:has-text('Continue')",
+            "a:has-text('I Agree')",
+            # Last resort: first submit button on the page
+            "input[type='submit']:first-of-type",
+        ]:
+            try:
+                el = page.locator(selector).first
+                if el.is_visible(timeout=1500):
+                    print(f"  [nav] accepting agreement via: {selector}")
+                    el.click()
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=15000)
+                    except Exception:
+                        pass
+                    time.sleep(2)
+                    accepted = True
+                    break
+            except Exception:
+                pass
+
+        if not accepted:
+            screenshot(page, "ERROR_agreement_not_accepted")
+            print("  [nav] WARNING: could not accept agreement")
+
+    dshot(page, "03_after_agreement")
+    print(f"  [nav] URL after agreement: {page.url}")
+
+    # Step 3: Now wait for the actual filing search form
+    print("  [nav] waiting for search form to render ...")
     try:
         page.wait_for_selector("select", timeout=20000)
         print("  [nav] form is ready")
     except PWTimeout:
         body_text = ""
         try:
-            body_text = page.locator("body").inner_text()[:300]
+            body_text = page.locator("body").inner_text()[:400]
         except Exception:
             pass
         screenshot(page, "ERROR_form_never_rendered")
         print(f"  [nav] page body: {body_text}")
+        # Log all links in case there's another click needed
+        links = page.locator("a").all()
+        link_info = [(l.inner_text().strip(), l.get_attribute("href") or "") for l in links[:20]]
+        print(f"  [nav] links: {link_info}")
         raise RuntimeError(
-            f"Search form never rendered. Page says: {body_text[:100]}\n"
-            "If you see '403 Forbidden', run with --headed to use a visible browser."
+            f"Search form never rendered. Page body: {body_text[:150]}"
         )
 
     dshot(page, "04_form_ready")
