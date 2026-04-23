@@ -289,30 +289,70 @@ def fill_search_form(page):
         screenshot(page, "ERROR_no_selects")
         raise RuntimeError("No <select> elements on search form")
 
-    # Business Type = 2nd option
+    # Business Type — find option whose text contains "Life" (not "-- Select --" or "Property")
     bt_options = selects[0].locator("option").all()
     print(f"  [form] Business Type options: {[o.inner_text().strip() for o in bt_options]}")
-    if len(bt_options) >= 2:
-        val = bt_options[1].get_attribute("value")
-        selects[0].select_option(value=val)
-        print(f"  [form] Business Type -> '{bt_options[1].inner_text().strip()}'")
+    life_val = None
+    for o in bt_options:
+        txt = o.inner_text().strip()
+        if "life" in txt.lower() or "accident" in txt.lower() or "health" in txt.lower():
+            life_val = o.get_attribute("value")
+            print(f"  [form] Business Type -> '{txt}' (value={life_val})")
+            break
+    if life_val:
+        selects[0].select_option(value=life_val)
     else:
-        print("  [form] WARNING: fewer than 2 Business Type options")
+        # Fallback: last non-blank option
+        non_blank = [o for o in bt_options if o.get_attribute("value") and o.inner_text().strip() != "-- Select --"]
+        if non_blank:
+            val = non_blank[-1].get_attribute("value")
+            selects[0].select_option(value=val)
+            print(f"  [form] Business Type fallback -> '{non_blank[-1].inner_text().strip()}'")
+        else:
+            print("  [form] WARNING: could not find Life/Health Business Type option")
 
-    # Wait for ToI to populate via AJAX
-    time.sleep(2)
-    try:
-        page.wait_for_function("document.querySelectorAll('select').length >= 2", timeout=8000)
-    except Exception:
-        pass
+    # Wait for ToI dropdown to populate via AJAX — SERFF dynamically loads it after BT change
+    print("  [form] waiting for Type of Insurance to populate ...")
+    time.sleep(1)
+    # Wait until a second select appears OR the first select's options change
+    for _ in range(20):  # up to 10 seconds
+        try:
+            count = page.locator("select").count()
+            if count >= 2:
+                break
+            # Also check if the first select now has different/more options
+            first_opts = page.locator("select").first.locator("option").all()
+            if len(first_opts) > 3:  # more than just BT options
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+
     dump_form_info(page)
     dshot(page, "06_after_bt")
 
-    # Type of Insurance = all options containing "supp"
+    # Type of Insurance — find the ToI select (different id from businessType)
     selects = page.locator("select").all()
-    toi = selects[1] if len(selects) >= 2 else selects[0]
+    toi = None
+    for sel in selects:
+        try:
+            sid = sel.get_attribute("id") or sel.get_attribute("name") or ""
+            if "business" not in sid.lower():
+                toi = sel
+                print(f"  [form] ToI select found: id={sid}")
+                break
+        except Exception:
+            pass
+    if toi is None and len(selects) >= 2:
+        toi = selects[1]
+        print("  [form] ToI: using selects[1] as fallback")
+    elif toi is None:
+        screenshot(page, "ERROR_no_toi")
+        print("  [form] WARNING: only one select on page — ToI may not have loaded")
+        toi = selects[0]
+
     toi_opts = toi.locator("option").all()
-    print(f"  [form] ToI options: {[o.inner_text().strip() for o in toi_opts]}")
+    print(f"  [form] ToI options ({len(toi_opts)}): {[o.inner_text().strip() for o in toi_opts]}")
 
     supp_vals = [
         o.get_attribute("value")
@@ -321,13 +361,13 @@ def fill_search_form(page):
     ]
     if supp_vals:
         toi.select_option(value=supp_vals)
-        print(f"  [form] ToI: selected {len(supp_vals)} supp option(s)")
+        print(f"  [form] ToI: selected {len(supp_vals)} supp option(s): {supp_vals}")
     else:
-        # Select everything non-blank as fallback
-        all_vals = [o.get_attribute("value") for o in toi_opts if o.get_attribute("value")]
+        all_vals = [o.get_attribute("value") for o in toi_opts
+                    if o.get_attribute("value") and o.inner_text().strip() != "-- Select --"]
         if all_vals:
             toi.select_option(value=all_vals)
-            print(f"  [form] ToI: no 'supp' options found — selected all {len(all_vals)}")
+            print(f"  [form] ToI: no 'supp' options — selected all {len(all_vals)} non-blank options")
 
     time.sleep(0.5)
     dshot(page, "07_after_toi")
