@@ -145,18 +145,55 @@ def ensure_serff_session(page):
     except Exception as ce:
         print(f"    [session] Cookie clear warning: {ce}")
     
-    # Go to home page
-    page.goto(f"{SERFF_BASE}/sfa/home/KY", timeout=30000)
-    page.wait_for_load_state("networkidle")
-    time.sleep(3)
+    # SERFF requires entry via a state DOI referrer link to establish a session.
+    # Going directly to filingaccess.serff.com always gives "Session Expired".
+    # We spoof the referrer by visiting the KY DOI page first, then following their SERFF link.
+    print("    [session] Entering via KY DOI referrer to establish valid session...")
+    
+    # Try known state referrer URLs (KY first, then fallback)
+    state_entry_urls = [
+        "https://insurance.ky.gov/ppc/new_default.aspx",
+        "https://insurance.ky.gov",
+    ]
+    
+    entered_via_state = False
+    for state_url in state_entry_urls:
+        try:
+            page.goto(state_url, timeout=20000)
+            page.wait_for_load_state("networkidle")
+            time.sleep(2)
+            # Look for a link to SERFF on the state page
+            for a in page.query_selector_all("a"):
+                href = a.get_attribute("href") or ""
+                txt = (a.text_content() or "").lower()
+                if "serff" in href.lower() or "serff" in txt or "filingaccess" in href.lower():
+                    print(f"    [session] Found SERFF link: {href}")
+                    a.click()
+                    page.wait_for_load_state("networkidle")
+                    time.sleep(3)
+                    entered_via_state = True
+                    break
+            if entered_via_state:
+                break
+        except Exception as e:
+            print(f"    [session] State URL {state_url} failed: {e}")
+    
+    if not entered_via_state:
+        # Spoof referrer manually and go directly
+        print("    [session] No state SERFF link found — going direct with referrer header")
+        page.set_extra_http_headers({"Referer": "https://insurance.ky.gov/ppc/new_default.aspx"})
+        page.goto(f"{SERFF_BASE}/sfa/home/KY", timeout=30000)
+        page.wait_for_load_state("networkidle")
+        time.sleep(3)
+    
     page.screenshot(path=str(debug_dir / "step1_home.png"))
-    print(f"    [session] Home page loaded: {page.url}")
+    print(f"    [session] At: {page.url}")
     
     # Click Begin Search if present
     clicked = False
     for selector in ["text=Begin Search", "a[href*='userAgreement']", "a[href*='beginSearch']"]:
         try:
-            page.click(selector, timeout=3000)
+            page.click(selector, timeout=5000)
             page.wait_for_load_state("networkidle")
             time.sleep(3)
             clicked = True
