@@ -1,0 +1,27 @@
+[
+  {
+    "state": "AL",
+    "status": "blocked",
+    "note": "403 Forbidden"
+  },
+  {
+    "state": "TX",
+    "status": "blocked",
+    "note": "403 Forbidden"
+  },
+  {
+    "state": "OH",
+    "status": "blocked",
+    "note": "403 Forbidden"
+  },
+  {
+    "state": "GA",
+    "status": "blocked",
+    "note": "403 Forbidden"
+  },
+  {
+    "state": "CO",
+    "status": "blocked",
+    "note": "403 Forbidden"
+  }
+]
