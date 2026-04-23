@@ -137,6 +137,14 @@ def ensure_serff_session(page):
 
     print("    [session] Establishing fresh SERFF session...")
     
+    # Clear all cookies and storage so SERFF sees a brand-new visitor
+    try:
+        page.context.clear_cookies()
+        page.evaluate("() => { localStorage.clear(); sessionStorage.clear(); }")
+        print("    [session] Cleared cookies and storage")
+    except Exception as ce:
+        print(f"    [session] Cookie clear warning: {ce}")
+    
     # Go to home page
     page.goto(f"{SERFF_BASE}/sfa/home/KY", timeout=30000)
     page.wait_for_load_state("networkidle")
