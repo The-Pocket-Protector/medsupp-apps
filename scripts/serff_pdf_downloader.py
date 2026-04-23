@@ -132,23 +132,44 @@ def ensure_serff_session(page):
     Navigates through home -> Begin Search -> Accept terms.
     Returns True if session established.
     """
+    debug_dir = PDF_DIR / "_debug"
+    debug_dir.mkdir(exist_ok=True)
+
     print("    [session] Establishing fresh SERFF session...")
     
-    # Go to home page for a real state
+    # Go to home page
     page.goto(f"{SERFF_BASE}/sfa/home/KY", timeout=30000)
     page.wait_for_load_state("networkidle")
-    time.sleep(2)
+    time.sleep(3)
+    page.screenshot(path=str(debug_dir / "step1_home.png"))
+    print(f"    [session] Home page loaded: {page.url}")
     
     # Click Begin Search if present
+    clicked = False
     for selector in ["text=Begin Search", "a[href*='userAgreement']", "a[href*='beginSearch']"]:
         try:
             page.click(selector, timeout=3000)
             page.wait_for_load_state("networkidle")
-            time.sleep(1)
-            print("    [session] Clicked Begin Search")
+            time.sleep(3)
+            clicked = True
+            print(f"    [session] Clicked '{selector}', now at: {page.url}")
             break
         except Exception:
             pass
+    
+    page.screenshot(path=str(debug_dir / "step2_after_begin_search.png"))
+    
+    # Dump all buttons/links at this point
+    elems = []
+    for e in page.query_selector_all("a, button, input"):
+        t = (e.text_content() or e.get_attribute("value") or "").strip()
+        h = e.get_attribute("href") or ""
+        if t or h:
+            elems.append(f"{t} | href={h}")
+    with open(debug_dir / "step2_elements.txt", "w") as f:
+        f.write(f"URL: {page.url}\n\n" + "\n".join(elems))
+    print(f"    [session] After Begin Search — URL: {page.url}")
+    print(f"    [session] Screenshot: output/pdfs/_debug/step2_after_begin_search.png")
     
     # Accept terms
     for selector in ["text=Accept", "text=I Accept", "input[value='Accept']",
@@ -157,15 +178,20 @@ def ensure_serff_session(page):
         try:
             page.click(selector, timeout=3000)
             page.wait_for_load_state("networkidle")
-            time.sleep(1)
-            print("    [session] Terms accepted")
+            time.sleep(2)
+            print(f"    [session] Terms accepted via {selector}, now at: {page.url}")
+            page.screenshot(path=str(debug_dir / "step3_after_accept.png"))
             return True
         except Exception:
             pass
     
-    # Manual fallback
-    print("    [session] Could not auto-accept. Please click Accept in the browser window, then press Enter.")
-    input("    Press Enter after accepting...")
+    # Manual fallback — browser is open, user can see it
+    print("    [session] Could not auto-accept terms.")
+    print("    [session] The browser window is open. Please manually navigate through the agreement and click Accept.")
+    print("    [session] Then come back here and press Enter.")
+    input("    Press Enter after you have accepted the terms in the browser: ")
+    page.screenshot(path=str(debug_dir / "step3_manual_accept.png"))
+    print(f"    [session] After manual accept — URL: {page.url}")
     return True
 
 
