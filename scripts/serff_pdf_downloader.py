@@ -218,6 +218,23 @@ def download_filing_zip(page, tracking_number, state, log, dry_run=False):
                     break
         
         if not zip_btn:
+            # Debug: save screenshot + dump all button text so we can see what's on the page
+            debug_dir = PDF_DIR / "_debug"
+            debug_dir.mkdir(exist_ok=True)
+            try:
+                page.screenshot(path=str(debug_dir / f"{tracking_number}.png"))
+                all_elems = page.query_selector_all("input, button, a")
+                btn_texts = []
+                for e in all_elems:
+                    t = (e.text_content() or e.get_attribute("value") or "").strip()
+                    if t:
+                        btn_texts.append(t)
+                with open(debug_dir / f"{tracking_number}_buttons.txt", "w") as dbf:
+                    dbf.write(f"URL: {current_url}\n\nButtons/Links/Inputs:\n")
+                    dbf.write("\n".join(btn_texts))
+                print(f"    [debug] Screenshot + button list saved to output/pdfs/_debug/{tracking_number}.png")
+            except Exception as de:
+                print(f"    [debug-err] {de}")
             print(f"    [warn] No ZIP button found for {tracking_number}")
             log[log_key] = {"status": "no_zip", "url": current_url, "ts": datetime.utcnow().isoformat()}
             return "no_zip"
