@@ -367,36 +367,51 @@ def fill_search_form(page):
 
     dshot(page, "06b_toi_panel_open")
 
-    # --- Step 4d: Type "Supp" into the search input at the top of the panel ---
+    # --- Step 4d: Type "Supp" into the search input INSIDE the ToI panel ---
+    # IMPORTANT: the filter input only exists in the DOM after the panel is opened.
+    # Scope all selectors strictly to inside .ui-multiselect-panel to avoid
+    # accidentally typing into other fields (e.g. company name).
     typed = False
+
+    # First confirm the panel is actually open by waiting for it to appear
+    panel_visible = False
+    for panel_sel in [
+        ".ui-multiselect-panel",
+        ".ui-multiselect-items-wrapper",
+    ]:
+        try:
+            if page.locator(panel_sel).first.is_visible(timeout=3000):
+                print(f"  [form] ToI panel confirmed open: {panel_sel}")
+                panel_visible = True
+                break
+        except Exception:
+            pass
+
+    if not panel_visible:
+        print("  [form] WARNING: ToI panel does not appear to be open")
+        screenshot(page, "ERROR_toi_panel_not_open")
+
+    # Now look for the filter input ONLY inside the panel
     for filter_sel in [
-        # PrimeFaces multi-select filter input
-        ".ui-multiselect-filter-input",
-        ".ui-multiselect-filter input",
+        ".ui-multiselect-panel .ui-multiselect-filter-input",
         ".ui-multiselect-panel input[type='text']",
         ".ui-multiselect-panel input",
-        # By id patterns
-        "[id*='nsuranceType'] input",
-        "[id*='typeOf']:not([id*='usinessType']) input",
-        # Generic filter/search inputs that appeared after panel opened
-        "input[id*='_filter']",
-        "input.ui-inputfield",
     ]:
         try:
             el = page.locator(filter_sel).first
-            if el.is_visible(timeout=1500):
-                print(f"  [form] Step 4d: typing 'Supp' into: {filter_sel}")
+            if el.is_visible(timeout=2000):
+                print(f"  [form] Step 4d: typing 'Supp' into panel input: {filter_sel}")
                 el.click()
                 el.fill("")
                 el.type("Supp", delay=80)
-                time.sleep(1.2)  # wait for list to filter
+                time.sleep(1.2)
                 typed = True
                 break
         except Exception:
             pass
 
     if not typed:
-        print("  [form] WARNING: could not find filter input")
+        print("  [form] WARNING: could not find filter input inside ToI panel")
         screenshot(page, "ERROR_filter_not_found")
 
     dshot(page, "06c_after_supp_typed")
