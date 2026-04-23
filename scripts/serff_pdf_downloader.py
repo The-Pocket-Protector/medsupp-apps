@@ -65,6 +65,19 @@ PDF_DIR.mkdir(parents=True, exist_ok=True)
 
 SERFF_BASE = "https://filingaccess.serff.com"
 
+def tracking_to_url(tracking_number):
+    """
+    Convert SERFF tracking number to filing summary URL.
+    e.g. AETN-132199103 -> .../filingSummary.xhtml?filingId=132199103
+    The numeric ID is the part after the dash.
+    """
+    parts = tracking_number.split("-")
+    if len(parts) == 2 and parts[1].isdigit():
+        filing_id = parts[1]
+        return f"{SERFF_BASE}/sfa/search/filingSummary.xhtml?filingId={filing_id}"
+    # Fallback to old format
+    return f"{SERFF_BASE}/sfa/filing/{tracking_number}"
+
 # ── Load filings ───────────────────────────────────────────────────────────────
 
 def load_filings(target_states=None):
@@ -173,7 +186,7 @@ def download_filing_zip(page, tracking_number, state, log, dry_run=False):
     
     try:
         # Navigate to filing
-        url = f"{SERFF_BASE}/sfa/filing/{tracking_number}"
+        url = tracking_to_url(tracking_number)
         page.goto(url, timeout=30000)
         page.wait_for_load_state("networkidle")
         time.sleep(2)
