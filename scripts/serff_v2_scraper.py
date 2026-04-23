@@ -18,7 +18,7 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-OUTPUT_DIR = Path("/home/openclaw/.openclaw/workspace/medsupp-apps/output/serff")
+OUTPUT_DIR = Path(__file__).parent.parent / "output" / "serff"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_FILE = OUTPUT_DIR / "all_states_results_v2.json"
 
