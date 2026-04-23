@@ -143,10 +143,27 @@ const tbl_data = await page.evaluate(() => {
     if (!dt) return { error: "no table", cnt: tables.length };
     const headers = Array.from(dt.querySelectorAll("th")).map(th => th.textContent.trim());
     const trs = Array.from(dt.querySelectorAll("tbody tr"));
-    const rows = trs.map(tr => Array.from(tr.querySelectorAll("td")).map(td => td.textContent.trim()));
+    const rows = trs.map(tr => {
+        const cells = Array.from(tr.querySelectorAll("td")).map(td => td.textContent.trim());
+        const link = tr.querySelector("a");
+        const href = link ? link.getAttribute("href") : null;
+        return { cells, href };
+    });
     return { headers, rows, total: trs.length };
 });
 JSON.stringify(tbl_data)
+"""
+
+JS_GET_NEXT_PAGE = """
+const next_btn = await page.$("a.ui-paginator-next:not(.ui-state-disabled), .ui-paginator-next:not(.ui-state-disabled)");
+if (next_btn) {
+    await next_btn.click();
+    await page.waitForLoadState("networkidle");
+    await page.waitForTimeout(3000);
+    "next:true"
+} else {
+    "next:false"
+}
 """
 
 # Get all pages if results are paginated
@@ -248,17 +265,40 @@ def scrape_state(state):
         r = execute(session_id, JS_CHANGE_ROWS_100, timeout=20)
         print(f"  [{state}] RowsPerPage: {r.get('result')}")
 
-        # Extract table
-        r = execute(session_id, JS_EXTRACT_TABLE, timeout=30)
-        table_data = json.loads(r.get("result") or "{}")
-        print(f"  [{state}] Table: {table_data.get('total', 0)} rows, headers: {table_data.get('headers', [])[:4]}")
-        result["table_data"] = table_data
-
-        if "rows" in table_data:
+        # Extract all pages
+        page_num = 1
+        all_filings = []
+        while True:
+            r = execute(session_id, JS_EXTRACT_TABLE, timeout=30)
+            table_data = json.loads(r.get("result") or "{}")
             headers = table_data.get("headers", [])
-            for row in table_data["rows"]:
-                filing = {headers[i] if i < len(headers) else f"col{i}": val for i, val in enumerate(row)}
-                result["filings"].append(filing)
+            rows = table_data.get("rows", [])
+            print(f"  [{state}] Page {page_num}: {len(rows)} rows")
+
+            for row in rows:
+                cells = row.get("cells", [])
+                href = row.get("href")
+                filing = {headers[i] if i < len(headers) else f"col{i}": val for i, val in enumerate(cells)}
+                if href:
+                    if href.startswith("http"):
+                        filing["filing_url"] = href
+                    else:
+                        filing["filing_url"] = "https://filingaccess.serff.com" + href
+                all_filings.extend([filing])
+
+            # Check for next page
+            r = execute(session_id, JS_GET_NEXT_PAGE, timeout=30)
+            next_result = r.get("result", "next:false")
+            print(f"  [{state}] Pagination: {next_result}")
+            if "next:false" in str(next_result):
+                break
+            page_num += 1
+            if page_num > 50:  # safety cap
+                print(f"  [{state}] Hit page cap (50), stopping")
+                break
+
+        result["filings"] = all_filings
+        result["table_data"] = {"total_extracted": len(all_filings), "pages": page_num}
 
         result["status"] = "complete"
 
