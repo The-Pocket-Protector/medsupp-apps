@@ -311,63 +311,134 @@ def fill_search_form(page):
         else:
             print("  [form] WARNING: could not find Life/Health Business Type option")
 
-    # Wait for ToI dropdown to populate via AJAX — SERFF dynamically loads it after BT change
-    print("  [form] waiting for Type of Insurance to populate ...")
-    time.sleep(1)
-    # Wait until a second select appears OR the first select's options change
-    for _ in range(20):  # up to 10 seconds
-        try:
-            count = page.locator("select").count()
-            if count >= 2:
-                break
-            # Also check if the first select now has different/more options
-            first_opts = page.locator("select").first.locator("option").all()
-            if len(first_opts) > 3:  # more than just BT options
-                break
-        except Exception:
-            pass
-        time.sleep(0.5)
+    # Wait for Type of Insurance widget to appear after BT selection (AJAX)
+    print("  [form] waiting for Type of Insurance widget to populate ...")
+    time.sleep(1.5)
 
+    # SERFF uses a PrimeFaces multi-select widget — NOT a native <select>.
+    # The widget has:
+    #   - a label/button to open the panel (role=combobox or a div with the field label)
+    #   - a filter input inside the panel
+    #   - checkboxes for each option
+    # Strategy: find the ToI widget container, click it to open, type "supp", check all.
+
+    # Dump everything visible for debugging
     dump_form_info(page)
     dshot(page, "06_after_bt")
 
-    # Type of Insurance — find the ToI select (different id from businessType)
-    selects = page.locator("select").all()
-    toi = None
-    for sel in selects:
+    # Log all input elements to find the filter box
+    inputs = page.locator("input").all()
+    input_info = []
+    for inp in inputs:
         try:
-            sid = sel.get_attribute("id") or sel.get_attribute("name") or ""
-            if "business" not in sid.lower():
-                toi = sel
-                print(f"  [form] ToI select found: id={sid}")
+            input_info.append({
+                "id": inp.get_attribute("id"),
+                "name": inp.get_attribute("name"),
+                "type": inp.get_attribute("type"),
+                "placeholder": inp.get_attribute("placeholder"),
+                "class": inp.get_attribute("class"),
+                "visible": inp.is_visible(),
+            })
+        except Exception:
+            pass
+    print(f"  [form] inputs on page: {input_info}")
+
+    # Step 1: Open the Type of Insurance panel by clicking the widget trigger
+    # PrimeFaces multi-select is typically a div or span with role="listbox" parent,
+    # or a label that says "Type of Insurance" or "-- Select --" nearby.
+    toi_opened = False
+    for trigger_sel in [
+        # PrimeFaces multi-select trigger button (the dropdown arrow)
+        "[id*='typeOfInsurance'] .ui-multiselect",
+        "[id*='typeOfInsurance'] .ui-selectonemenu",
+        "[id*='typeOfInsurance']",
+        "[id*='TypeOfInsurance']",
+        "[id*='insuranceType']",
+        # Generic: any multiselect widget that isn't the business type one
+        ".ui-multiselect:not([id*='businessType'])",
+        ".ui-selectmanymenu:not([id*='businessType'])",
+        # Try clicking the label text
+        "label:has-text('Type of Insurance')",
+        "span:has-text('Type of Insurance')",
+    ]:
+        try:
+            el = page.locator(trigger_sel).first
+            if el.is_visible(timeout=1500):
+                print(f"  [form] clicking ToI trigger: {trigger_sel}")
+                el.click()
+                time.sleep(0.8)
+                toi_opened = True
                 break
         except Exception:
             pass
-    if toi is None and len(selects) >= 2:
-        toi = selects[1]
-        print("  [form] ToI: using selects[1] as fallback")
-    elif toi is None:
-        screenshot(page, "ERROR_no_toi")
-        print("  [form] WARNING: only one select on page — ToI may not have loaded")
-        toi = selects[0]
 
-    toi_opts = toi.locator("option").all()
-    print(f"  [form] ToI options ({len(toi_opts)}): {[o.inner_text().strip() for o in toi_opts]}")
+    if not toi_opened:
+        print("  [form] WARNING: could not find/open ToI widget directly")
+        screenshot(page, "ERROR_toi_widget_not_found")
 
-    supp_vals = [
-        o.get_attribute("value")
-        for o in toi_opts
-        if "supp" in o.inner_text().lower() and o.get_attribute("value")
-    ]
-    if supp_vals:
-        toi.select_option(value=supp_vals)
-        print(f"  [form] ToI: selected {len(supp_vals)} supp option(s): {supp_vals}")
-    else:
-        all_vals = [o.get_attribute("value") for o in toi_opts
-                    if o.get_attribute("value") and o.inner_text().strip() != "-- Select --"]
-        if all_vals:
-            toi.select_option(value=all_vals)
-            print(f"  [form] ToI: no 'supp' options — selected all {len(all_vals)} non-blank options")
+    dshot(page, "06b_after_toi_open")
+
+    # Step 2: Type "supp" into the filter input (may be visible after opening the panel)
+    typed = False
+    for filter_sel in [
+        "[id*='typeOfInsurance'] input[type='text']",
+        "[id*='typeOfInsurance'] input",
+        "[id*='TypeOfInsurance'] input",
+        ".ui-multiselect-filter-input",
+        ".ui-multiselect input",
+        "input[id*='filter' i]",
+        "input[placeholder*='filter' i]",
+        "input[placeholder*='search' i]",
+    ]:
+        try:
+            el = page.locator(filter_sel).first
+            if el.is_visible(timeout=1500):
+                print(f"  [form] typing 'supp' into filter: {filter_sel}")
+                el.click()
+                el.fill("")
+                el.type("supp", delay=80)
+                time.sleep(1.0)  # wait for filter to apply
+                typed = True
+                break
+        except Exception:
+            pass
+
+    if not typed:
+        print("  [form] could not find filter input — will try checking all visible checkboxes")
+
+    dshot(page, "06c_after_type_supp")
+
+    # Step 3: Check all visible checkboxes in the filtered list
+    # Log what checkboxes are now visible
+    checkboxes = page.locator("input[type='checkbox']").all()
+    cb_info = []
+    for cb in checkboxes:
+        try:
+            cb_info.append({
+                "id": cb.get_attribute("id"),
+                "value": cb.get_attribute("value"),
+                "visible": cb.is_visible(),
+                "checked": cb.is_checked(),
+            })
+        except Exception:
+            pass
+    print(f"  [form] checkboxes: {cb_info}")
+
+    checked_count = 0
+    for cb in checkboxes:
+        try:
+            if cb.is_visible() and not cb.is_checked():
+                # Skip the "select all" checkbox (usually has no value or value="on")
+                val = cb.get_attribute("value") or ""
+                cb.check()
+                checked_count += 1
+        except Exception:
+            pass
+    print(f"  [form] checked {checked_count} checkbox(es)")
+
+    if checked_count == 0 and not typed:
+        screenshot(page, "ERROR_no_checkboxes_checked")
+        print("  [form] WARNING: no checkboxes were checked — ToI may not have filtered correctly")
 
     time.sleep(0.5)
     dshot(page, "07_after_toi")
