@@ -117,14 +117,61 @@ def save_log(log):
 
 # ── SERFF navigation ──────────────────────────────────────────────────────────
 
-terms_accepted = False  # Global flag — only need to accept once per session
+def is_session_page(page):
+    """Detect if we're on a session-expired or login-required page."""
+    url = page.url
+    content = page.content().lower()
+    return (
+        "session" in content and "expir" in content
+    ) or "login" in url or "signin" in url or "userAgreement" in url
+
+
+def ensure_serff_session(page):
+    """
+    Make sure we have an active SERFF session.
+    Navigates through home -> Begin Search -> Accept terms.
+    Returns True if session established.
+    """
+    print("    [session] Establishing fresh SERFF session...")
+    
+    # Go to home page for a real state
+    page.goto(f"{SERFF_BASE}/sfa/home/KY", timeout=30000)
+    page.wait_for_load_state("networkidle")
+    time.sleep(2)
+    
+    # Click Begin Search if present
+    for selector in ["text=Begin Search", "a[href*='userAgreement']", "a[href*='beginSearch']"]:
+        try:
+            page.click(selector, timeout=3000)
+            page.wait_for_load_state("networkidle")
+            time.sleep(1)
+            print("    [session] Clicked Begin Search")
+            break
+        except Exception:
+            pass
+    
+    # Accept terms
+    for selector in ["text=Accept", "text=I Accept", "input[value='Accept']",
+                     "input[value='I Accept']", "button:has-text('Accept')",
+                     "text=Agree", "text=I Agree"]:
+        try:
+            page.click(selector, timeout=3000)
+            page.wait_for_load_state("networkidle")
+            time.sleep(1)
+            print("    [session] Terms accepted")
+            return True
+        except Exception:
+            pass
+    
+    # Manual fallback
+    print("    [session] Could not auto-accept. Please click Accept in the browser window, then press Enter.")
+    input("    Press Enter after accepting...")
+    return True
 
 
 def accept_terms_if_needed(page):
     """Accept SERFF terms if the accept button is visible."""
-    global terms_accepted
     try:
-        # Look for Accept button
         btns = page.query_selector_all("button, input[type='submit'], input[type='button']")
         for btn in btns:
             txt = (btn.text_content() or btn.get_attribute("value") or "").strip()
@@ -133,7 +180,6 @@ def accept_terms_if_needed(page):
                 btn.click()
                 page.wait_for_load_state("networkidle")
                 time.sleep(1)
-                terms_accepted = True
                 return True
     except Exception:
         pass
@@ -191,7 +237,16 @@ def download_filing_zip(page, tracking_number, state, log, dry_run=False):
         page.wait_for_load_state("networkidle")
         time.sleep(2)
         
-        # Accept terms if needed
+        # If session expired or we're on a login/terms page, re-establish session then retry
+        if is_session_page(page) or page.url == url and "filingSummary" not in page.url and len(page.query_selector_all("input, button")) < 3:
+            print("    [session] Session issue detected — re-establishing...")
+            ensure_serff_session(page)
+            # Now navigate to the filing
+            page.goto(url, timeout=30000)
+            page.wait_for_load_state("networkidle")
+            time.sleep(2)
+        
+        # Accept terms if still needed
         accept_terms_if_needed(page)
         page.wait_for_load_state("networkidle")
         time.sleep(1)
@@ -354,62 +409,9 @@ def main():
         page = context.new_page()
         
         # ── Accept SERFF terms ─────────────────────────────────────────────
-        print("Opening SERFF — accepting terms...")
-        page.goto(f"{SERFF_BASE}/sfa/home/KY", timeout=30000)
-        page.wait_for_load_state("networkidle")
-        time.sleep(2)
-        
-        # Step 1: Click "Begin Search" (goes to user agreement page)
-        try:
-            page.click("text=Begin Search", timeout=5000)
-            page.wait_for_load_state("networkidle")
-            time.sleep(1)
-            print("  Clicked 'Begin Search'")
-        except Exception:
-            # Try href-based approach
-            for a in page.query_selector_all("a"):
-                href = a.get_attribute("href") or ""
-                if "userAgreement" in href or "beginSearch" in href:
-                    a.click()
-                    page.wait_for_load_state("networkidle")
-                    time.sleep(1)
-                    print("  Clicked agreement link")
-                    break
-        
-        # Step 2: Accept the user agreement
-        accepted = False
-        for selector in ["text=Accept", "text=I Accept", "text=Agree", "text=I Agree",
-                         "input[value='Accept']", "input[value='I Accept']",
-                         "button:has-text('Accept')"]:
-            try:
-                page.click(selector, timeout=3000)
-                page.wait_for_load_state("networkidle")
-                time.sleep(1)
-                print(f"  Accepted terms via: {selector}")
-                accepted = True
-                break
-            except Exception:
-                pass
-        
-        if not accepted:
-            # Take a debug screenshot of what we see
-            debug_dir = PDF_DIR / "_debug"
-            debug_dir.mkdir(exist_ok=True)
-            page.screenshot(path=str(debug_dir / "terms_page.png"))
-            all_links = []
-            for e in page.query_selector_all("a, button, input"):
-                t = (e.text_content() or e.get_attribute("value") or "").strip()
-                h = e.get_attribute("href") or ""
-                if t or h:
-                    all_links.append(f"{t} | href={h}")
-            with open(debug_dir / "terms_page_links.txt", "w") as f:
-                f.write(f"URL: {page.url}\n\n" + "\n".join(all_links))
-            print(f"  [warn] Could not auto-accept terms.")
-            print(f"  Debug screenshot: output/pdfs/_debug/terms_page.png")
-            print(f"  The browser window is open — please click Accept manually, then press Enter here.")
-            input("  Press Enter after accepting terms in the browser...")
-        
-        print("Terms accepted. Starting downloads...\n")
+        print("Opening SERFF — establishing session...")
+        ensure_serff_session(page)
+        print("Session established. Starting downloads...\n")
         
         for i, filing in enumerate(filings):
             tracking = filing.get("SERFF Tracking Number", "")
