@@ -4,7 +4,7 @@ serff_tx_appdownloader.py
 --------------------------
 Searches SERFF Filing Access for Texas filings:
   - Business Type: 2nd option ("Life, Accident/Health, Annuity, Credit")
-  - Type of Insurance: type "supp" in filter, check all results
+  - Type of Insurance: select all options containing "supp"
 
 Targets "Closed-Approved" Application filings, downloads ZIPs, uploads to GitHub.
 
@@ -44,6 +44,13 @@ FILING_STATUS_FILTER = "Closed-Approved"
 FILING_TYPE_FILTER   = "Application"
 
 DEBUG_MODE = False
+
+# Realistic Chrome user-agent to avoid bot detection
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,54 +100,79 @@ def upload_to_github(local_path, filename):
         return False
 
 # ---------------------------------------------------------------------------
-# Navigation — must go through home page to set state cookie
+# Navigation
 # ---------------------------------------------------------------------------
 
 def go_to_search_page(page):
     """
-    SERFF requires the state context cookie from /sfa/home/TX.
-    Direct navigation to filingSearch.xhtml gives a blank page without it.
-    Flow: home -> accept terms if any -> click Begin Search -> wait for form.
+    Navigate through SERFF home -> Begin Search.
+    Must go through home to get the state session cookie.
+    Uses realistic browser headers to avoid 403 bot detection.
     """
     print("  [nav] navigating to TX home ...")
     page.goto(f"{SERFF_BASE}/sfa/home/TX", wait_until="domcontentloaded")
-
-    # Wait for page to settle (SERFF uses JSF which needs JS to run)
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
     except Exception:
         pass
     time.sleep(2)
+
+    # Check for 403
+    body_text = ""
+    try:
+        body_text = page.locator("body").inner_text()
+    except Exception:
+        pass
+    if "403" in body_text or "Forbidden" in body_text:
+        screenshot(page, "ERROR_403")
+        raise RuntimeError(
+            "SERFF returned 403 Forbidden.\n"
+            "This means SERFF is blocking automated access.\n"
+            "Try running with --headed flag to use a visible browser window.\n"
+            "See instructions below."
+        )
+
     dshot(page, "01_home")
     print(f"  [nav] home loaded, URL: {page.url}")
+    print(f"  [nav] page title: {page.title()}")
 
-    # Accept any disclaimer/terms modal
-    for btn_text in ["I Agree", "Accept", "Agree", "OK"]:
+    # Accept disclaimer if present
+    for btn_text in ["I Agree", "Accept", "Agree", "OK", "Continue"]:
         try:
             btn = page.locator(f"button:has-text('{btn_text}'), input[value='{btn_text}']").first
             if btn.is_visible(timeout=1500):
-                print(f"  [nav] clicking terms button: {btn_text}")
+                print(f"  [nav] accepting terms: {btn_text}")
                 btn.click()
                 page.wait_for_load_state("domcontentloaded")
                 time.sleep(1)
-                dshot(page, "02_after_terms")
                 break
         except Exception:
             pass
 
-    # Click "Begin Search" — it should be a link on the home page
+    # Log all links for debugging
+    links = page.locator("a").all()
+    link_info = []
+    for lnk in links[:30]:
+        try:
+            link_info.append((lnk.inner_text().strip(), lnk.get_attribute("href") or ""))
+        except Exception:
+            pass
+    print(f"  [nav] links on home page: {link_info}")
+
+    # Click Begin Search
     clicked = False
     for selector in [
         "a:has-text('Begin Search')",
         "a:has-text('Search Filings')",
         "a:has-text('Filing Search')",
-        "input[value*='Search' i][type='button']",
-        "input[value*='Search' i][type='submit']",
+        "a[href*='filingSearch']",
+        "a[href*='search']",
+        "input[value*='Search' i]",
         "button:has-text('Search')",
     ]:
         try:
             el = page.locator(selector).first
-            if el.is_visible(timeout=3000):
+            if el.is_visible(timeout=2000):
                 print(f"  [nav] clicking: {selector}")
                 el.click()
                 try:
@@ -154,128 +186,103 @@ def go_to_search_page(page):
             pass
 
     if not clicked:
-        # Log what links are on the page for debugging
-        links = page.locator("a").all()
-        link_texts = []
-        for lnk in links[:20]:
-            try:
-                link_texts.append(lnk.inner_text().strip())
-            except Exception:
-                pass
-        print(f"  [nav] WARNING: could not find Begin Search. Page links: {link_texts}")
         screenshot(page, "ERROR_no_begin_search")
+        print("  [nav] WARNING: could not click Begin Search")
 
     dshot(page, "03_after_click")
     print(f"  [nav] URL after click: {page.url}")
 
-    # Now wait for the search form to actually render
-    # SERFF's JSF form renders <select> elements — wait for one to appear
-    print("  [nav] waiting for search form to render ...")
+    # Wait for form to render
+    print("  [nav] waiting for search form ...")
     try:
         page.wait_for_selector("select", timeout=20000)
         print("  [nav] form is ready")
     except PWTimeout:
+        body_text = ""
+        try:
+            body_text = page.locator("body").inner_text()[:300]
+        except Exception:
+            pass
         screenshot(page, "ERROR_form_never_rendered")
-        # Dump page content for debugging
-        body = page.locator("body").inner_text()[:500]
-        print(f"  [nav] page body text: {body}")
-        raise RuntimeError("Search form never rendered — SERFF may require login or session is invalid")
+        print(f"  [nav] page body: {body_text}")
+        raise RuntimeError(
+            f"Search form never rendered. Page says: {body_text[:100]}\n"
+            "If you see '403 Forbidden', run with --headed to use a visible browser."
+        )
 
     dshot(page, "04_form_ready")
 
 
 def dump_form_info(page):
-    """Print all select IDs and options for debugging."""
     selects = page.locator("select").all()
-    print(f"  [form] {len(selects)} select(s) on page:")
+    print(f"  [form] {len(selects)} select(s):")
     for i, sel in enumerate(selects):
         try:
             sid = sel.get_attribute("id") or sel.get_attribute("name") or f"[{i}]"
-            opts = [o.inner_text().strip() for o in sel.locator("option").all()[:12]]
-            print(f"    select id={sid}: {opts}")
+            opts = [o.inner_text().strip() for o in sel.locator("option").all()[:15]]
+            print(f"    [{i}] id={sid}: {opts}")
         except Exception:
             pass
 
 
 def fill_search_form(page):
-    """
-    Step 3: Select Business Type = 2nd option.
-    Step 4: Select all Type of Insurance options containing 'supp'.
-    Step 5: Click Search.
-    """
     dump_form_info(page)
     dshot(page, "05_before_fill")
 
-    # --- Business Type: select 2nd option by index ---
     selects = page.locator("select").all()
     if not selects:
         screenshot(page, "ERROR_no_selects")
-        raise RuntimeError("No <select> elements found on search form")
+        raise RuntimeError("No <select> elements on search form")
 
-    # First select is typically Business Type
-    bt_select = selects[0]
-    bt_options = bt_select.locator("option").all()
+    # Business Type = 2nd option
+    bt_options = selects[0].locator("option").all()
     print(f"  [form] Business Type options: {[o.inner_text().strip() for o in bt_options]}")
-
     if len(bt_options) >= 2:
         val = bt_options[1].get_attribute("value")
-        bt_select.select_option(value=val)
-        print(f"  [form] Business Type set to: '{bt_options[1].inner_text().strip()}'")
+        selects[0].select_option(value=val)
+        print(f"  [form] Business Type -> '{bt_options[1].inner_text().strip()}'")
     else:
-        print("  [form] WARNING: Business Type has fewer than 2 options")
+        print("  [form] WARNING: fewer than 2 Business Type options")
 
-    # Wait for Type of Insurance to populate (AJAX reload after BT selection)
+    # Wait for ToI to populate via AJAX
     time.sleep(2)
     try:
-        page.wait_for_function("document.querySelectorAll('select').length >= 2", timeout=10000)
+        page.wait_for_function("document.querySelectorAll('select').length >= 2", timeout=8000)
     except Exception:
         pass
     dump_form_info(page)
     dshot(page, "06_after_bt")
 
-    # --- Type of Insurance: second select, pick all options containing 'supp' ---
+    # Type of Insurance = all options containing "supp"
     selects = page.locator("select").all()
-    if len(selects) < 2:
-        screenshot(page, "ERROR_no_toi_select")
-        print("  [form] WARNING: only 1 select found after Business Type change")
-        toi_select = selects[0]
-    else:
-        toi_select = selects[1]
-
-    toi_options = toi_select.locator("option").all()
-    print(f"  [form] ToI options ({len(toi_options)}): {[o.inner_text().strip() for o in toi_options]}")
+    toi = selects[1] if len(selects) >= 2 else selects[0]
+    toi_opts = toi.locator("option").all()
+    print(f"  [form] ToI options: {[o.inner_text().strip() for o in toi_opts]}")
 
     supp_vals = [
         o.get_attribute("value")
-        for o in toi_options
+        for o in toi_opts
         if "supp" in o.inner_text().lower() and o.get_attribute("value")
     ]
-
     if supp_vals:
-        toi_select.select_option(value=supp_vals)
-        print(f"  [form] ToI: selected {len(supp_vals)} option(s)")
+        toi.select_option(value=supp_vals)
+        print(f"  [form] ToI: selected {len(supp_vals)} supp option(s)")
     else:
-        print("  [form] WARNING: no 'supp' options found — selecting all non-blank options")
-        all_vals = [
-            o.get_attribute("value")
-            for o in toi_options
-            if o.get_attribute("value") and o.get_attribute("value") != ""
-        ]
+        # Select everything non-blank as fallback
+        all_vals = [o.get_attribute("value") for o in toi_opts if o.get_attribute("value")]
         if all_vals:
-            toi_select.select_option(value=all_vals)
-            print(f"  [form] ToI: selected all {len(all_vals)} option(s)")
+            toi.select_option(value=all_vals)
+            print(f"  [form] ToI: no 'supp' options found — selected all {len(all_vals)}")
 
     time.sleep(0.5)
     dshot(page, "07_after_toi")
 
-    # --- Click Search button ---
-    clicked = False
+    # Click Search
     for selector in [
         "input[type='submit'][value*='earch' i]",
         "input[type='submit']",
         "button[type='submit']",
         "button:has-text('Search')",
-        "a:has-text('Search')",
     ]:
         try:
             el = page.locator(selector).first
@@ -287,17 +294,14 @@ def fill_search_form(page):
                 except Exception:
                     pass
                 time.sleep(1.5)
-                clicked = True
-                break
+                dshot(page, "08_results")
+                print(f"  [form] results URL: {page.url}")
+                return
         except Exception:
             pass
 
-    if not clicked:
-        screenshot(page, "ERROR_no_search_button")
-        raise RuntimeError("Could not find/click the Search button")
-
-    dshot(page, "08_search_results")
-    print(f"  [form] search submitted, URL: {page.url}")
+    screenshot(page, "ERROR_no_search_button")
+    raise RuntimeError("Could not find/click the Search button")
 
 
 def sort_by_filing_status(page):
@@ -329,7 +333,6 @@ def collect_matching_rows(page):
                 except Exception:
                     pass
                 matches.append({"text": text.strip(), "href": href, "page": page_num})
-        # Next page
         try:
             nxt = page.get_by_role("link", name=re.compile(r"next|>", re.I)).first
             if nxt.is_visible(timeout=1000):
@@ -354,7 +357,7 @@ def download_filing(page, row, output_dir):
     try:
         page.goto(url, wait_until="domcontentloaded")
         time.sleep(1.5)
-    except Exception as e:
+    except Exception:
         return None, url
     if "session" in page.url.lower() and "expired" in page.content().lower():
         raise RuntimeError("Session expired")
@@ -395,6 +398,8 @@ def main():
     parser.add_argument("--no-github", action="store_true")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--headed", action="store_true",
+                        help="Run with visible browser window (use if getting 403)")
     args = parser.parse_args()
     DEBUG_MODE = args.debug
 
@@ -402,8 +407,27 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        context = browser.new_context(accept_downloads=True)
+        browser = pw.chromium.launch(
+            headless=not args.headed,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+            ]
+        )
+        context = browser.new_context(
+            user_agent=USER_AGENT,
+            viewport={"width": 1280, "height": 800},
+            accept_downloads=True,
+            locale="en-US",
+            timezone_id="America/Chicago",
+            extra_http_headers={
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }
+        )
+        # Remove webdriver flag that gives away automation
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
         page = context.new_page()
 
         try:
@@ -443,7 +467,6 @@ def main():
                         lp, fb = download_filing(page, row, OUTPUT_DIR)
                     else:
                         raise
-
                 if lp:
                     log["downloaded"].append(row.get("href") or str(lp))
                     if not args.no_github:
