@@ -311,134 +311,160 @@ def fill_search_form(page):
         else:
             print("  [form] WARNING: could not find Life/Health Business Type option")
 
-    # Wait for Type of Insurance widget to appear after BT selection (AJAX)
-    print("  [form] waiting for Type of Insurance widget to populate ...")
+    # Wait for Type of Insurance widget to load after BT selection
+    print("  [form] waiting for Type of Insurance widget ...")
     time.sleep(1.5)
-
-    # SERFF uses a PrimeFaces multi-select widget — NOT a native <select>.
-    # The widget has:
-    #   - a label/button to open the panel (role=combobox or a div with the field label)
-    #   - a filter input inside the panel
-    #   - checkboxes for each option
-    # Strategy: find the ToI widget container, click it to open, type "supp", check all.
-
-    # Dump everything visible for debugging
     dump_form_info(page)
     dshot(page, "06_after_bt")
 
-    # Log all input elements to find the filter box
-    inputs = page.locator("input").all()
-    input_info = []
-    for inp in inputs:
-        try:
-            input_info.append({
-                "id": inp.get_attribute("id"),
-                "name": inp.get_attribute("name"),
-                "type": inp.get_attribute("type"),
-                "placeholder": inp.get_attribute("placeholder"),
-                "class": inp.get_attribute("class"),
-                "visible": inp.is_visible(),
-            })
-        except Exception:
-            pass
-    print(f"  [form] inputs on page: {input_info}")
-
-    # Step 1: Open the Type of Insurance panel by clicking the widget trigger
-    # PrimeFaces multi-select is typically a div or span with role="listbox" parent,
-    # or a label that says "Type of Insurance" or "-- Select --" nearby.
+    # --- Step 4c: Click the ToI dropdown arrow (▼) to open the panel ---
+    # The widget shows "Type of Insurance" label + "0 Types of Insurance selected" text
+    # and a ▼ arrow on the right. It's a PrimeFaces multi-select widget.
+    # The clickable trigger is typically a button or div inside the widget container.
     toi_opened = False
     for trigger_sel in [
-        # PrimeFaces multi-select trigger button (the dropdown arrow)
-        "[id*='typeOfInsurance'] .ui-multiselect",
-        "[id*='typeOfInsurance'] .ui-selectonemenu",
-        "[id*='typeOfInsurance']",
-        "[id*='TypeOfInsurance']",
-        "[id*='insuranceType']",
-        # Generic: any multiselect widget that isn't the business type one
-        ".ui-multiselect:not([id*='businessType'])",
-        ".ui-selectmanymenu:not([id*='businessType'])",
-        # Try clicking the label text
-        "label:has-text('Type of Insurance')",
-        "span:has-text('Type of Insurance')",
+        # PrimeFaces multi-select: the trigger is a button with class ui-multiselect-trigger
+        ".ui-multiselect-trigger",
+        # Or the whole multiselect widget (not the business type one)
+        ".ui-multiselect:not([id*='usinessType']):not([id*='businessType'])",
+        # By ID patterns
+        "[id*='nsuranceType'] .ui-multiselect-trigger",
+        "[id*='nsuranceType']",
+        "[id*='typeOf'] .ui-multiselect-trigger",
+        "[id*='typeOf']:not([id*='usinessType'])",
+        # Text-based: find element near "Type of Insurance" label
+        "label:has-text('Type of Insurance') + * button",
+        "label:has-text('Type of Insurance') ~ * .ui-multiselect-trigger",
     ]:
         try:
             el = page.locator(trigger_sel).first
             if el.is_visible(timeout=1500):
-                print(f"  [form] clicking ToI trigger: {trigger_sel}")
+                print(f"  [form] Step 4c: clicking ToI trigger: {trigger_sel}")
                 el.click()
-                time.sleep(0.8)
+                time.sleep(1.0)
                 toi_opened = True
                 break
         except Exception:
             pass
 
     if not toi_opened:
-        print("  [form] WARNING: could not find/open ToI widget directly")
-        screenshot(page, "ERROR_toi_widget_not_found")
+        # Last resort: click anything that says "Type of Insurance" or "0 Types"
+        for txt in ["0 Types of Insurance", "Type of Insurance"]:
+            try:
+                el = page.get_by_text(txt, exact=False).first
+                if el.is_visible(timeout=1500):
+                    print(f"  [form] Step 4c: clicking by text: {txt}")
+                    el.click()
+                    time.sleep(1.0)
+                    toi_opened = True
+                    break
+            except Exception:
+                pass
 
-    dshot(page, "06b_after_toi_open")
+    if not toi_opened:
+        screenshot(page, "ERROR_toi_not_opened")
+        print("  [form] WARNING: could not open ToI panel")
 
-    # Step 2: Type "supp" into the filter input (may be visible after opening the panel)
+    dshot(page, "06b_toi_panel_open")
+
+    # --- Step 4d: Type "Supp" into the search input at the top of the panel ---
     typed = False
     for filter_sel in [
-        "[id*='typeOfInsurance'] input[type='text']",
-        "[id*='typeOfInsurance'] input",
-        "[id*='TypeOfInsurance'] input",
+        # PrimeFaces multi-select filter input
         ".ui-multiselect-filter-input",
-        ".ui-multiselect input",
-        "input[id*='filter' i]",
-        "input[placeholder*='filter' i]",
-        "input[placeholder*='search' i]",
+        ".ui-multiselect-filter input",
+        ".ui-multiselect-panel input[type='text']",
+        ".ui-multiselect-panel input",
+        # By id patterns
+        "[id*='nsuranceType'] input",
+        "[id*='typeOf']:not([id*='usinessType']) input",
+        # Generic filter/search inputs that appeared after panel opened
+        "input[id*='_filter']",
+        "input.ui-inputfield",
     ]:
         try:
             el = page.locator(filter_sel).first
             if el.is_visible(timeout=1500):
-                print(f"  [form] typing 'supp' into filter: {filter_sel}")
+                print(f"  [form] Step 4d: typing 'Supp' into: {filter_sel}")
                 el.click()
                 el.fill("")
-                el.type("supp", delay=80)
-                time.sleep(1.0)  # wait for filter to apply
+                el.type("Supp", delay=80)
+                time.sleep(1.2)  # wait for list to filter
                 typed = True
                 break
         except Exception:
             pass
 
     if not typed:
-        print("  [form] could not find filter input — will try checking all visible checkboxes")
+        print("  [form] WARNING: could not find filter input")
+        screenshot(page, "ERROR_filter_not_found")
 
-    dshot(page, "06c_after_type_supp")
+    dshot(page, "06c_after_supp_typed")
 
-    # Step 3: Check all visible checkboxes in the filtered list
-    # Log what checkboxes are now visible
-    checkboxes = page.locator("input[type='checkbox']").all()
-    cb_info = []
-    for cb in checkboxes:
+    # --- Step 4f: Click the master checkbox in the panel header to select all filtered results ---
+    # The master checkbox is to the LEFT of the search input in the purple header bar.
+    # In PrimeFaces this is typically .ui-multiselect-header input[type='checkbox']
+    # or the first checkbox in the panel.
+    master_checked = False
+    for master_sel in [
+        ".ui-multiselect-header input[type='checkbox']",
+        ".ui-multiselect-header .ui-chkbox input",
+        ".ui-multiselect-header .ui-chkbox",
+        ".ui-multiselect-panel .ui-multiselect-header input[type='checkbox']",
+        ".ui-multiselect-panel .ui-chkbox-box",  # the visible box to click
+    ]:
         try:
-            cb_info.append({
-                "id": cb.get_attribute("id"),
-                "value": cb.get_attribute("value"),
-                "visible": cb.is_visible(),
-                "checked": cb.is_checked(),
-            })
+            el = page.locator(master_sel).first
+            if el.is_visible(timeout=1500):
+                print(f"  [form] Step 4f: clicking master checkbox: {master_sel}")
+                el.click()
+                time.sleep(0.5)
+                master_checked = True
+                break
         except Exception:
             pass
-    print(f"  [form] checkboxes: {cb_info}")
 
-    checked_count = 0
-    for cb in checkboxes:
+    if not master_checked:
+        # Fallback: check all individual visible checkboxes
+        print("  [form] master checkbox not found — checking individual visible checkboxes")
+        checkboxes = page.locator(".ui-multiselect-panel input[type='checkbox'], input[type='checkbox']").all()
+        checked_count = 0
+        for cb in checkboxes:
+            try:
+                if cb.is_visible() and not cb.is_checked():
+                    cb.click()
+                    checked_count += 1
+            except Exception:
+                pass
+        print(f"  [form] checked {checked_count} individual checkbox(es)")
+
+    dshot(page, "06d_after_select_all")
+
+    # --- Step 4g: Verify selection count ---
+    try:
+        selected_text = page.get_by_text("Types of Insurance selected", exact=False).first.inner_text(timeout=2000)
+        print(f"  [form] Step 4g: {selected_text}")
+    except Exception:
+        print("  [form] could not read selection count")
+
+    # --- Step 4h: Close the panel ---
+    for close_sel in [
+        ".ui-multiselect-close",
+        ".ui-multiselect-panel .ui-multiselect-close",
+        "button:has-text('Close')",
+        ".ui-multiselect-header .ui-multiselect-close",
+    ]:
         try:
-            if cb.is_visible() and not cb.is_checked():
-                # Skip the "select all" checkbox (usually has no value or value="on")
-                val = cb.get_attribute("value") or ""
-                cb.check()
-                checked_count += 1
+            el = page.locator(close_sel).first
+            if el.is_visible(timeout=1500):
+                print(f"  [form] Step 4h: closing panel via: {close_sel}")
+                el.click()
+                time.sleep(0.5)
+                break
         except Exception:
             pass
-    print(f"  [form] checked {checked_count} checkbox(es)")
 
-    if checked_count == 0 and not typed:
-        screenshot(page, "ERROR_no_checkboxes_checked")
-        print("  [form] WARNING: no checkboxes were checked — ToI may not have filtered correctly")
+    dshot(page, "06e_panel_closed")
 
     time.sleep(0.5)
     dshot(page, "07_after_toi")
